@@ -1,3 +1,6 @@
+import os
+import random
+
 import nonebot
 from nonebot.adapters import Bot
 from nonebot.plugin import PluginMetadata
@@ -11,6 +14,9 @@ from zhenxun.utils.common_utils import CommonUtils
 from zhenxun.utils.enum import PluginType
 from zhenxun.utils.message import MessageUtils
 from zhenxun.utils.platform import broadcast_group
+
+MORNING_PATH = IMAGE_PATH / "morning" / "zao"  # 早安图片文件夹
+GOODNIGHT_PATH = IMAGE_PATH / "morning" / "wan"  # 晚安图片文件夹
 
 __plugin_meta__ = PluginMetadata(
     name="早晚安被动技能",
@@ -45,7 +51,8 @@ async def check(bot: Bot, group_id: str) -> bool:
     minute=1,
 )
 async def _():
-    message = MessageUtils.build_message(["早上好", IMAGE_PATH / "zhenxun" / "zao.jpg"])
+    image = MORNING_PATH / random.choice(os.listdir(MORNING_PATH))
+    message = MessageUtils.build_message(["早上好", image])
     await broadcast_group(message, log_cmd="被动早晚安", check_func=check)
     logger.info("每日早安发送...")
 
@@ -60,7 +67,7 @@ async def _():
     message = MessageUtils.build_message(
         [
             f"{BotConfig.self_nickname}要睡觉了，你们也要早点睡呀",
-            IMAGE_PATH / "zhenxun" / "sleep.jpg",
+            GOODNIGHT_PATH / random.choice(os.listdir(GOODNIGHT_PATH)),
         ]
     )
     await broadcast_group(

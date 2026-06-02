@@ -225,7 +225,7 @@ class GroupManager:
                     await MessageUtils.build_message(
                         [
                             f"嗨，大家好，我是{BotConfig.self_nickname}， "
-                            "希望我们可以友好相处（眨眼眨眼）！",
+                            "希望我们可以友好相处~",
                             file_path,
                         ]
                     ).send()
@@ -299,7 +299,7 @@ class GroupManager:
         image = DEFAULT_IMAGE_PATH / random.choice(os.listdir(DEFAULT_IMAGE_PATH))
         await MessageUtils.build_message(
             [
-                "新人快跑啊！！本群现状↓（快使用自定义群欢迎消息！）",
+                "欢迎新人~",
                 image,
             ]
         ).send()
@@ -418,7 +418,7 @@ class GroupManager:
                 )
             else:
                 operator_name = ""
-            return f"{user_name} 被 {operator_name} 送走了."
+            return f"{user_name} 被送走了."
         elif sub_type == "leave":
-            return f"{user_name}离开了我们..."
+            return f"{user_name}跌出了虚空. (不要恶意揣测自行退群的群员, 这很不好.)"
         return None
