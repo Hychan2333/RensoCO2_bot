@@ -7,7 +7,6 @@ import ujson
 soul_list = {
     "欲望化身": "desire_avatar",
     "霸道总裁": "dominator",
-    "耽美鉴赏家": "aesthetic_curator",
     "恋物诗人": "fetish_poet",
     "纯欲神官": "oracle_of_purity",
     "百合诗人": "lily_poet",
