@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 import os
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +24,7 @@ class AuthDispatchRuntimeConfig:
     circuit_reset_time: int = 300
     matcher_route_prefilter_ttl: int = 2
     prefilter_stats_log_interval: float = 10.0
-    cache_sweep_interval: float = 1.0
+    cache_sweep_interval: float = 45.0
     dispatch_stats_log_interval: float = 10.0
 
 
@@ -101,6 +102,22 @@ def _warn_invalid_env(env_name: str, raw: str, exc: Exception) -> None:
         return
 
 
+def _default_passive_db_limit() -> int:
+    try:
+        from zhenxun.configs.config import BotConfig
+
+        scheme = urlparse(BotConfig.db_url or "").scheme.lower()
+    except Exception:
+        scheme = ""
+    if scheme == "sqlite":
+        return 1
+    if scheme.startswith("postgres"):
+        return 6
+    if scheme == "mysql":
+        return 4
+    return 2
+
+
 def _load_config(cls: type, prefix: str):
     values = {}
     default_obj = cls()
@@ -115,6 +132,9 @@ def _load_config(cls: type, prefix: str):
                 raw = candidate_value
                 break
         if raw is None or not raw.strip():
+            if cls is AuthDispatchRuntimeConfig and item.name == "passive_db_limit":
+                values[item.name] = _default_passive_db_limit()
+                continue
             values[item.name] = default
             continue
         try:

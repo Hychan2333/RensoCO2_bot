@@ -54,6 +54,9 @@ dependencies = [
     "protobuf>=7.0.0,<8.0.0",
     "drissionpage>=4.0.0.0,<5.0.0.0",
     "anyio>=4.0.0,<5.0.0",
+    "mcp>=1.8.0",
+    "jieba>=0.42.1",
+    "aiodocker>=0.24.0",
 ]
 
 [project.scripts]
@@ -153,6 +156,7 @@ executionEnvironments = [
 
 typeCheckingMode = "standard"
 reportShadowedImports = false
+reportMissingImports = "none"
 disableBytesTypePromotions = true
 
 [tool.pytest.ini_options]
