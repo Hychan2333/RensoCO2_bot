@@ -14,6 +14,7 @@ _ORIGINAL_ONEBOT11_GROUP_MESSAGE: Callable[..., Awaitable[dict[str, Any]]] | Non
 _ORIGINAL_QQ_C2C_MESSAGE: Callable[..., Awaitable[dict[str, Any]]] | None = None
 _ORIGINAL_QQ_GROUP_AT_MESSAGE: Callable[..., Awaitable[dict[str, Any]]] | None = None
 _ORIGINAL_QQ_GUILD_MESSAGE: Callable[..., Awaitable[dict[str, Any]]] | None = None
+_ORIGINAL_DISCORD_MESSAGE: Callable[..., Awaitable[dict[str, Any]]] | None = None
 
 
 def _sender_value(sender: Any, key: str, default: Any = None) -> Any:
@@ -24,6 +25,21 @@ def _sender_value(sender: Any, key: str, default: Any = None) -> Any:
 def _event_value(event: Event, key: str, default: Any = None) -> Any:
     value = getattr(event, key, default)
     return default if value is None else value
+
+
+def _is_unset_value(value: Any) -> bool:
+    if value is None:
+        return True
+    with contextlib.suppress(Exception):
+        from nonebot.adapters.discord import is_unset
+
+        return bool(is_unset(value))
+    return value.__class__.__name__ in {"UnsetType", "Unset"}
+
+
+def _discord_value(obj: Any, key: str, default: Any = None) -> Any:
+    value = getattr(obj, key, default)
+    return default if _is_unset_value(value) else value
 
 
 def _event_group_name(event: Event) -> str | None:
@@ -167,6 +183,53 @@ async def _fast_qq_guild_message(bot: Bot, event: Event) -> dict[str, Any]:
     return base
 
 
+async def _fast_discord_message(bot: Bot, event: Event) -> dict[str, Any]:
+    """Build Discord Uninfo session from the event payload.
+
+    Discord may return 404 Unknown User when uninfo tries to re-fetch a guild
+    member for deleted, webhook-like, or partial message payloads. The event
+    author/member fields are enough for matcher dependency checks, so avoid
+    fragile REST enrichment here.
+    """
+
+    author = _event_value(event, "author")
+    if _is_unset_value(author):
+        raise ValueError("Discord message payload is missing author")
+
+    username = str(_discord_value(author, "username", "") or "")
+    user_id = str(_discord_value(author, "id", "") or "")
+    base: dict[str, Any] = {
+        "user_id": user_id,
+        "name": username,
+        "nickname": username,
+        "avatar": _discord_value(author, "avatar"),
+    }
+
+    guild_id = _event_value(event, "guild_id")
+    if not _is_unset_value(guild_id):
+        base |= {
+            "guild_id": str(guild_id),
+            "guild_name": "",
+            "guild_avatar": None,
+        }
+        channel_id = _event_value(event, "channel_id")
+        if not _is_unset_value(channel_id):
+            base |= {
+                "channel_id": str(channel_id),
+                "channel_name": "",
+                "channel_avatar": None,
+            }
+
+        member = _event_value(event, "member")
+        if not _is_unset_value(member):
+            base["nickname"] = str(_discord_value(member, "nick", "") or username)
+            joined_at = _discord_value(member, "joined_at")
+            if not _is_unset_value(joined_at):
+                base["joined_at"] = joined_at
+
+    return base
+
+
 async def _singleflight_fetch(self: Any, bot: Bot, event: Event) -> Any:
     original = _ORIGINAL_FETCH
     if original is None:
@@ -201,7 +264,7 @@ async def _singleflight_fetch(self: Any, bot: Bot, event: Event) -> Any:
 def apply_uninfo_onebot11_patch() -> None:
     global _ORIGINAL_FETCH, _ORIGINAL_ONEBOT11_GROUP_MESSAGE, _PATCHED
     global _ORIGINAL_QQ_C2C_MESSAGE, _ORIGINAL_QQ_GROUP_AT_MESSAGE
-    global _ORIGINAL_QQ_GUILD_MESSAGE
+    global _ORIGINAL_QQ_GUILD_MESSAGE, _ORIGINAL_DISCORD_MESSAGE
     if _PATCHED:
         return
 
@@ -269,6 +332,45 @@ def apply_uninfo_onebot11_patch() -> None:
                 )
             setattr(_fast_qq_guild_message, "__zhenxun_fast_qq__", True)
             qq_fetcher.endpoint[event_type] = _fast_qq_guild_message
+
+    with contextlib.suppress(Exception):
+        discord_event_module = importlib.import_module("nonebot.adapters.discord.event")
+        DirectMessageCreateEvent = getattr(
+            discord_event_module,
+            "DirectMessageCreateEvent",
+        )
+        DirectMessageUpdateEvent = getattr(
+            discord_event_module,
+            "DirectMessageUpdateEvent",
+        )
+        GuildMessageCreateEvent = getattr(
+            discord_event_module,
+            "GuildMessageCreateEvent",
+        )
+        GuildMessageUpdateEvent = getattr(
+            discord_event_module,
+            "GuildMessageUpdateEvent",
+        )
+        from nonebot_plugin_uninfo.adapters.discord.main import (
+            fetcher as discord_fetcher,
+        )
+
+        for event_type in (
+            DirectMessageCreateEvent,
+            GuildMessageCreateEvent,
+            DirectMessageUpdateEvent,
+            GuildMessageUpdateEvent,
+        ):
+            original_discord = discord_fetcher.endpoint.get(event_type)
+            if getattr(original_discord, "__zhenxun_fast_discord__", False):
+                continue
+            if _ORIGINAL_DISCORD_MESSAGE is None and original_discord is not None:
+                _ORIGINAL_DISCORD_MESSAGE = cast(
+                    Callable[..., Awaitable[dict[str, Any]]],
+                    original_discord,
+                )
+            setattr(_fast_discord_message, "__zhenxun_fast_discord__", True)
+            discord_fetcher.endpoint[event_type] = _fast_discord_message
 
     try:
         from nonebot_plugin_uninfo.fetch import InfoFetcher

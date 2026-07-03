@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 
 from nonebot import get_driver
 from nonebot.adapters import Bot, Event
@@ -39,6 +40,43 @@ driver = get_driver()
 register_runtime_bootstrap(driver)
 
 
+def _event_timestamp(value) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _is_dcqq_relay_webhook_echo(event: Event) -> bool:
+    webhook_id = getattr(event, "webhook_id", None)
+    try:
+        from nonebot.adapters.discord import is_not_unset
+    except ImportError:
+        is_webhook = webhook_id is not None
+    else:
+        is_webhook = is_not_unset(webhook_id) and webhook_id is not None
+    if not is_webhook:
+        return False
+
+    relay_links = getattr(get_driver().config, "dcqq_relay_channel_links", []) or []
+    relay_webhook_ids: set[str] = set()
+    for link in relay_links:
+        link_webhook_id = (
+            link.get("webhook_id") if isinstance(link, dict) else getattr(link, "webhook_id", None)
+        )
+        if link_webhook_id is not None:
+            relay_webhook_ids.add(str(link_webhook_id))
+
+    return (
+        event.get_type() == "message"
+        and getattr(event, "guild_id", None) is not None
+        and str(webhook_id) in relay_webhook_ids
+    )
+
+
 @driver.on_bot_connect
 async def _mark_bot_connected(bot: Bot):
     del bot
@@ -71,10 +109,12 @@ async def _drop_message_before_cache_ready(event: Event):
     mark_activity()
     if event.get_type() != "message":
         return
+    if _is_dcqq_relay_webhook_echo(event):
+        raise IgnoredException("ignore dcqq relay webhook echo")
     if not is_cache_ready():
         raise IgnoredException("cache not ready ignore")
     if _BOT_CONNECT_TS is not None:
-        event_ts = getattr(event, "time", None)
+        event_ts = _event_timestamp(getattr(event, "time", None))
         if event_ts is not None and event_ts < _BOT_CONNECT_TS:
             raise IgnoredException("drop backlog message")
 

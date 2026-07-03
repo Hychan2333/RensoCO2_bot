@@ -1,0 +1,76 @@
+import json
+from typing_extensions import override
+
+from nonebot.drivers import Response
+from nonebot.exception import (
+    ActionFailed as BaseActionFailed,
+    AdapterException,
+    ApiNotAvailable as BaseApiNotAvailable,
+    NetworkError as BaseNetworkError,
+    NoLogException as BaseNoLogException,
+)
+
+
+class DiscordAdapterException(AdapterException):
+    def __init__(self) -> None:
+        super().__init__("Discord")
+
+
+class NoLogException(BaseNoLogException, DiscordAdapterException):
+    pass
+
+
+class ActionFailed(BaseActionFailed, DiscordAdapterException):
+    def __init__(self, response: Response) -> None:
+        self.status_code: int = response.status_code
+        self.code: int | None = None
+        self.message: str | None = None
+        self.errors: dict | None = None
+        self.data: dict | None = None
+        if response.content:
+            body = json.loads(response.content)
+            self._prepare_body(body)
+
+    @override
+    def __repr__(self) -> str:
+        return (
+            f"<{self.__class__.__name__}: {self.status_code}, code={self.code}, "
+            f"message={self.message}, data={self.data}, errors={self.errors}>"
+        )
+
+    @override
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def _prepare_body(self, body: dict) -> None:
+        self.code = body.get("code")
+        self.message = body.get("message")
+        self.errors = body.get("errors")
+        self.data = body.get("data")
+
+
+class UnauthorizedException(ActionFailed):
+    pass
+
+
+class RateLimitException(ActionFailed):
+    pass
+
+
+class NetworkError(BaseNetworkError, DiscordAdapterException):
+    def __init__(self, msg: str | None = None) -> None:
+        super().__init__()
+        self.msg: str | None = msg
+        """错误原因"""
+
+    @override
+    def __repr__(self) -> str:
+        return f"<NetWorkError message={self.msg}>"
+
+    @override
+    def __str__(self) -> str:
+        return self.__repr__()
+
+
+class ApiNotAvailable(BaseApiNotAvailable, DiscordAdapterException):
+    pass

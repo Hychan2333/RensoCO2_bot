@@ -1,0 +1,37 @@
+from nonebot import get_plugin_config
+from nonebot.adapters.discord.config import Config as dc_Config
+from pydantic import BaseModel
+
+
+class Link(BaseModel):
+    qq_bot_id: str | None = None
+    dc_bot_id: str | None = None
+    dc_guild_id: int
+    dc_channel_id: int
+    qq_group_id: int
+
+
+class LinkWithoutWebhook(Link):
+    webhook_id: int | None = None
+    webhook_token: str | None = None
+
+
+class LinkWithWebhook(Link):
+    webhook_id: int
+    webhook_token: str
+
+
+class Config(BaseModel):
+    dcqq_relay_channel_links: list[LinkWithoutWebhook] = []
+    """QQ group and Discord channel mappings"""
+    dcqq_relay_unmatch_beginning: list[str] = ["/"]
+    """Message prefixes that should not be relayed"""
+    dcqq_relay_only_to_me: bool = False
+    """Only relay messages addressed to the bot"""
+
+
+plugin_config = get_plugin_config(Config)
+channel_links = plugin_config.dcqq_relay_channel_links
+unmatch_beginning = plugin_config.dcqq_relay_unmatch_beginning
+only_to_me = plugin_config.dcqq_relay_only_to_me
+discord_proxy = get_plugin_config(dc_Config).discord_proxy

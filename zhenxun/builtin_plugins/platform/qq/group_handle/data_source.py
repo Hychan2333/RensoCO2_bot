@@ -3,8 +3,6 @@ from datetime import datetime
 import os
 from pathlib import Path
 import random
-import sys
-
 from nonebot.adapters import Bot
 from nonebot.exception import ActionFailed
 from nonebot_plugin_alconna import At, UniMessage
@@ -47,13 +45,6 @@ _REFRESH_TASKS: set[asyncio.Task] = set()
 def _normalize_platform(platform: str | set[str] | None) -> str | None:
     return next(iter(platform), None) if isinstance(platform, set) else platform
 
-
-def _is_join_verify_pending(group_id: str, user_id: str) -> bool:
-    plugin = sys.modules.get("zhenxun.plugins.join_verify")
-    is_pending_verification = getattr(plugin, "is_pending_verification", None)
-    if not callable(is_pending_verification):
-        return False
-    return is_pending_verification(group_id, user_id)
 
 
 async def _safe_get_group_member_info(bot: Bot, group_id: str, user_id: str) -> dict:
@@ -359,14 +350,6 @@ class GroupManager:
         _REFRESH_TASKS.add(task)
         task.add_done_callback(_REFRESH_TASKS.discard)
         logger.info(f"用户{user_id} 所属{group_id} 更新成功")
-        if _is_join_verify_pending(group_id, str(user_id)):
-            logger.info(
-                "用户仍在进群验证中，跳过自动欢迎消息",
-                "入群检测",
-                session=user_id,
-                group_id=group_id,
-            )
-            return
         if not await CommonUtils.task_is_block(
             session, "group_welcome"
         ) and cls._flmt.check(group_id):

@@ -228,6 +228,19 @@ def _run_worker() -> None:
         driver.register_adapter(QQAdapter)
         enabled_adapters.append("QQ")
 
+    if BotConfig.discord_adapter_load:
+        try:
+            from nonebot.adapters.discord import Adapter as DiscordAdapter
+        except ImportError as e:
+            raise RuntimeError(
+                "DISCORD_ADAPTER_LOAD=True 但未安装 nonebot-adapter-discord，"
+                "请安装后再开启 Discord 适配器。"
+            ) from e
+        _patch_discord_event_log()
+        _patch_discord_reply_check()
+        driver.register_adapter(DiscordAdapter)
+        enabled_adapters.append("Discord")
+
     nonebot.logger.info(f"已启用适配器: {', '.join(enabled_adapters)}")
 
     nonebot.load_plugins("zhenxun/builtin_plugins")
@@ -240,6 +253,53 @@ def _run_worker() -> None:
             nonebot.load_plugins(ext)
 
     nonebot.run(timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT)
+
+
+def _patch_discord_event_log() -> None:
+    from nonebot.adapters.discord.event import Event as DiscordEvent
+    from nonebot.adapters.discord.event import MessageEvent as DiscordMessageEvent
+    from nonebot.utils import escape_tag
+
+    if getattr(DiscordEvent, "_zhenxun_compact_log", False):
+        return
+
+    def compact_get_log_string(self: DiscordEvent) -> str:
+        if isinstance(self, DiscordMessageEvent):
+            return f"[{self.get_event_name()}]: {self.get_event_description()}"
+
+        parts = [f"[{self.get_event_name()}]"]
+        for attr in ("guild_id", "channel_id", "user_id", "id"):
+            value = getattr(self, attr, None)
+            if value is not None:
+                parts.append(f"{attr}={value}")
+        return escape_tag(": " + " ".join(parts))
+
+    DiscordEvent.get_log_string = compact_get_log_string
+    DiscordEvent._zhenxun_compact_log = True
+
+
+def _patch_discord_reply_check() -> None:
+    import nonebot.adapters.discord.bot as discord_bot
+    from nonebot.adapters.discord.exception import ActionFailed
+
+    origin_check_reply = getattr(discord_bot, "_check_reply", None)
+    if origin_check_reply is None or getattr(
+        origin_check_reply, "_zhenxun_ignore_unknown_message", False
+    ):
+        return
+
+    async def safe_check_reply(bot, event):
+        try:
+            await origin_check_reply(bot, event)
+        except ActionFailed as e:
+            if getattr(e, "code", None) == 10008 or (
+                getattr(e, "message", None) == "Unknown Message"
+            ):
+                return
+            raise
+
+    safe_check_reply._zhenxun_ignore_unknown_message = True
+    discord_bot._check_reply = safe_check_reply
 
 
 def _build_worker_command() -> list[str]:
