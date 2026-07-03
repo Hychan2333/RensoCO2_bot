@@ -144,7 +144,11 @@ data/
 log/
 backup/
 .idea/
+# Runtime resources stay local-only.
 resources/
+# User cache folders under `resources/` that should never be tracked.
+resources/image/sign/today_card/
+resources/temp/summary_group/avatar/
 .vscode/launch.json
 
 ./.env.dev
