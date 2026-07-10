@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from pathlib import Path
 
 from zhenxun.configs.config import Config
@@ -5,6 +6,51 @@ from zhenxun.configs.path_config import DATA_PATH
 from zhenxun.services.log import logger
 
 QUOTE_ASSETS_PATH = Path(__file__).parent / "templates"
+QUOTE_RECORD_BLACKLIST_KEY = "QUOTE_RECORD_BLACKLIST"
+
+
+def _normalize_user_id(user_id: object) -> str:
+    return str(user_id).strip()
+
+
+def get_quote_record_blacklist() -> list[str]:
+    """获取禁止被记录为语录的账号列表。"""
+    raw_blacklist = Config.get_config("quote", QUOTE_RECORD_BLACKLIST_KEY, [])
+    if isinstance(raw_blacklist, str):
+        raw_items = raw_blacklist.replace(",", " ").split()
+    elif isinstance(raw_blacklist, Iterable):
+        raw_items = raw_blacklist
+    else:
+        raw_items = []
+
+    blacklist: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        user_id = _normalize_user_id(item)
+        if user_id and user_id not in seen:
+            blacklist.append(user_id)
+            seen.add(user_id)
+    return blacklist
+
+
+def is_quote_record_blacklisted(user_id: str | int | None) -> bool:
+    """检查账号是否禁止被记录为语录。"""
+    if user_id is None:
+        return False
+    return _normalize_user_id(user_id) in set(get_quote_record_blacklist())
+
+
+def set_quote_record_blacklist(user_ids: Iterable[str | int]) -> list[str]:
+    """保存语录记录黑名单，并返回规范化后的列表。"""
+    blacklist: list[str] = []
+    seen: set[str] = set()
+    for item in user_ids:
+        user_id = _normalize_user_id(item)
+        if user_id and user_id not in seen:
+            blacklist.append(user_id)
+            seen.add(user_id)
+    Config.set_config("quote", QUOTE_RECORD_BLACKLIST_KEY, blacklist, auto_save=True)
+    return blacklist
 
 
 def get_quote_path() -> Path:

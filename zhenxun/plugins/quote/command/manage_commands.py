@@ -1,13 +1,14 @@
 import os
-from typing import Optional, Literal, Union
-from nonebot.permission import SUPERUSER
+from typing import Literal, Union
+
 from arclet.alconna import Alconna, Args, Arparma, MultiVar, Option, Subcommand
 from nonebot.adapters.onebot.v11 import (
     Bot,
-    Event,
     Bot as V11Bot,
+    Event,
     MessageEvent,
 )
+from nonebot.permission import SUPERUSER
 from nonebot_plugin_alconna import At, on_alconna
 from nonebot_plugin_alconna.uniseg import Image
 from nonebot_plugin_alconna.uniseg.tools import reply_fetch
@@ -20,12 +21,18 @@ from zhenxun.utils.message import MessageUtils
 from zhenxun.utils.platform import PlatformUtils
 from zhenxun.utils.rules import admin_check
 
-from ..config import resolve_quote_image_path
+from ..config import (
+    QUOTE_ASSETS_PATH,
+    get_quote_record_blacklist,
+    resolve_quote_image_path,
+    set_quote_record_blacklist,
+)
 from ..services.quote_service import QuoteService
-from ..config import QUOTE_ASSETS_PATH
+
+UserParam = At | int | str
 
 
-async def _get_image_from_reply(event: Event, bot: Bot) -> Optional[Image]:
+async def _get_image_from_reply(event: Event, bot: Bot) -> Image | None:
     """
     从回复消息中提取图片。
     此函数总是通过API获取消息详情，并直接解析返回的原始数据。
@@ -190,6 +197,17 @@ quote_manage_cmd = on_alconna(
             ),
         ),
         Subcommand("theme", Args["theme_name?", str]),
+        Subcommand(
+            "blacklist",
+            Subcommand("add", Args["users", MultiVar(UserParam)], alias={"添加"}),
+            Subcommand(
+                "remove",
+                Args["users", MultiVar(UserParam)],
+                alias={"删除", "del", "rm"},
+            ),
+            Subcommand("list", alias={"查看", "列表", "ls"}),
+            alias={"黑名单"},
+        ),
     ),
     permission=SUPERUSER,
     block=True,
@@ -198,6 +216,7 @@ quote_manage_cmd = on_alconna(
 
 quote_manage_cmd.shortcut("语录管理", {"args": ["manager"]})
 quote_manage_cmd.shortcut("语录主题", {"args": ["theme"]})
+quote_manage_cmd.shortcut("语录黑名单", {"args": ["blacklist"]})
 
 
 @quote_manage_cmd.handle()
@@ -206,6 +225,71 @@ async def _(bot: Bot, event: MessageEvent, arp: Arparma, session: Uninfo):
         await handle_adv_delete(bot, event, arp, session)
     elif arp.find("theme"):
         await handle_theme(bot, event, arp, session)
+    elif arp.find("blacklist"):
+        await handle_blacklist(arp)
+
+
+def _user_param_to_id(user: UserParam) -> str:
+    if isinstance(user, At):
+        return str(user.target)
+    return str(user).strip()
+
+
+def _normalize_user_params(users: list[UserParam]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for user in users:
+        user_id = _user_param_to_id(user)
+        if user_id and user_id not in seen:
+            result.append(user_id)
+            seen.add(user_id)
+    return result
+
+
+async def handle_blacklist(arp: Arparma):
+    """处理语录记录黑名单管理命令"""
+    blacklist = get_quote_record_blacklist()
+
+    if arp.find("blacklist.add"):
+        users: list[UserParam] = arp.query("blacklist.add.users", [])
+        user_ids = _normalize_user_params(users)
+        if not user_ids:
+            await quote_manage_cmd.finish("请提供要加入黑名单的账号ID")
+
+        exists = set(blacklist)
+        added = [user_id for user_id in user_ids if user_id not in exists]
+        set_quote_record_blacklist([*blacklist, *user_ids])
+
+        if added:
+            await quote_manage_cmd.finish(
+                f"已加入语录记录黑名单: {', '.join(added)}"
+            )
+        await quote_manage_cmd.finish("这些账号已在语录记录黑名单中，无需重复添加。")
+
+    if arp.find("blacklist.remove"):
+        users: list[UserParam] = arp.query("blacklist.remove.users", [])
+        user_ids = _normalize_user_params(users)
+        if not user_ids:
+            await quote_manage_cmd.finish("请提供要移出黑名单的账号ID")
+
+        remove_ids = set(user_ids)
+        removed = [user_id for user_id in blacklist if user_id in remove_ids]
+        set_quote_record_blacklist(
+            user_id for user_id in blacklist if user_id not in remove_ids
+        )
+
+        if removed:
+            await quote_manage_cmd.finish(
+                f"已移出语录记录黑名单: {', '.join(removed)}"
+            )
+        await quote_manage_cmd.finish("这些账号不在语录记录黑名单中。")
+
+    if not blacklist:
+        await quote_manage_cmd.finish("语录记录黑名单为空。")
+
+    await quote_manage_cmd.finish(
+        "语录记录黑名单:\n" + "\n".join(f"- {user_id}" for user_id in blacklist)
+    )
 
 
 def get_available_themes() -> list[str]:

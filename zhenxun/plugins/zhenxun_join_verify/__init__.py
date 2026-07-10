@@ -16,6 +16,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 from nonebot_plugin_alconna import Alconna, Args, At, Match, UniMessage, on_alconna
+from nonebot_plugin_alconna.uniseg.tools import reply_fetch
 from nonebot_plugin_uninfo import Uninfo
 
 from zhenxun.configs.config import Config
@@ -95,6 +96,7 @@ __plugin_meta__ = PluginMetadata(
 )
 
 verification_tasks: dict[tuple[int, int], dict[str, Any]] = {}
+verification_message_index: dict[str, tuple[int, int]] = {}
 permission_notify_time: dict[int, float] = {}
 welcome_reserved_until: dict[int, float] = {}
 
@@ -155,6 +157,49 @@ def _remove_notify_user(group_id: int | str, user_id: int | str) -> bool:
 
 def _get_config_value(key: str, default: Any) -> Any:
     return Config.get_config(PLUGIN_MODULE, key, default)
+
+
+def _extract_receipt_message_ids(receipt: Any) -> list[str]:
+    msg_ids = getattr(receipt, "msg_ids", None)
+    if not msg_ids:
+        return []
+
+    result: list[str] = []
+    for msg_id_info in msg_ids:
+        message_id = None
+        if isinstance(msg_id_info, dict):
+            message_id = msg_id_info.get("message_id")
+        else:
+            message_id = getattr(msg_id_info, "message_id", None)
+        if message_id is not None:
+            result.append(str(message_id))
+    return result
+
+
+def _bind_verification_message_ids(
+    key: tuple[int, int],
+    task_info: dict[str, Any],
+    receipt: Any,
+) -> None:
+    message_ids = _extract_receipt_message_ids(receipt)
+    if not message_ids:
+        return
+    task_info["message_ids"] = message_ids
+    for message_id in message_ids:
+        verification_message_index[message_id] = key
+
+
+def _pop_verification_task(key: tuple[int, int]) -> dict[str, Any] | None:
+    task_info = verification_tasks.pop(key, None)
+    if not task_info:
+        return None
+
+    for message_id in task_info.get("message_ids", []):
+        verification_message_index.pop(str(message_id), None)
+    for message_id, message_key in list(verification_message_index.items()):
+        if message_key == key:
+            verification_message_index.pop(message_id, None)
+    return task_info
 
 
 async def _bot_has_group_admin_permission(bot: Bot, group_id: int) -> bool:
@@ -241,10 +286,12 @@ async def _cancel_group_verifications_for_no_permission(
         task_group_id, task_user_id = key
         if task_group_id != group_id:
             continue
+        task_info = _pop_verification_task(key)
+        if not task_info:
+            continue
         task = task_info.get("task")
         if task:
             task.cancel()
-        del verification_tasks[key]
         cancelled_users.append(task_user_id)
 
     _release_reserved_group_welcome_cooldown(group_id)
@@ -388,7 +435,7 @@ async def timeout_kick(bot: Bot, group_id: int, user_id: int, timeout: int):
     await asyncio.sleep(timeout)
     key = (group_id, user_id)
     if key in verification_tasks:
-        del verification_tasks[key]
+        _pop_verification_task(key)
         try:
             await bot.set_group_kick(
                 group_id=group_id, user_id=user_id, reject_add_request=False
@@ -580,12 +627,57 @@ async def _(bot: Bot, event: GroupIncreaseNoticeEvent | GroupAdminNoticeEvent):
     )
 
     logger.info(f"准备发送验证消息给群 {group_id} 的用户 {user_id}")
-    await msg.send()
+    receipt = await msg.send()
+    _bind_verification_message_ids(key, verification_tasks[key], receipt)
     logger.info("验证消息发送完成")
 
 
 def is_in_verification(event: GroupMessageEvent) -> bool:
     return (event.group_id, event.user_id) in verification_tasks
+
+
+async def is_manual_cancel_verification(
+    bot: Bot,
+    event: GroupMessageEvent,
+    session: Uninfo,
+) -> bool:
+    if event.get_plaintext().strip() != "取消验证":
+        return False
+    reply = await reply_fetch(event, bot)
+    if not reply or str(reply.id) not in verification_message_index:
+        return False
+    return await admin_check(5)(bot, event, session)
+
+
+manual_cancel_matcher = on_message(
+    rule=Rule(is_manual_cancel_verification), priority=3, block=True
+)
+
+
+@manual_cancel_matcher.handle()
+async def _(bot: Bot, event: GroupMessageEvent):
+    reply = await reply_fetch(event, bot)
+    if not reply:
+        return
+
+    key = verification_message_index.get(str(reply.id))
+    if not key:
+        return
+
+    task_info = _pop_verification_task(key)
+    if not task_info:
+        return
+
+    task = task_info.get("task")
+    if task:
+        task.cancel()
+    _release_reserved_group_welcome_cooldown(key[0])
+    await MessageUtils.build_message("已取消此次验证.").send(reply_to=True)
+    logger.info(
+        f"管理员 {event.user_id} 手动取消群 {key[0]} 用户 {key[1]} 的进群验证。",
+        PLUGIN_MODULE,
+        target=key[0],
+    )
 
 
 verification_matcher = on_message(
@@ -628,7 +720,7 @@ async def _(bot: Bot, event: GroupMessageEvent):
 
     if is_correct:
         task_info["task"].cancel()
-        del verification_tasks[key]
+        _pop_verification_task(key)
         success_msg = MessageUtils.build_message("验证通过~")
         if not await CommonUtils.task_is_block(bot, "group_welcome", str(group_id)):
             try:
@@ -654,7 +746,7 @@ async def _(bot: Bot, event: GroupMessageEvent):
 
         if remaining <= 0:
             task_info["task"].cancel()
-            del verification_tasks[key]
+            _pop_verification_task(key)
             await MessageUtils.build_message("验证失败次数过多，已移出群聊。").send(
                 reply_to=True
             )

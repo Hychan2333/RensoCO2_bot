@@ -1,44 +1,47 @@
 import base64
 import hashlib
-import os
 import html
+import os
 import re
 import uuid
 from typing import Any, cast
 
 import aiofiles
-from arclet.alconna import Alconna, Args, Arparma, Option
-from nonebot.permission import SUPERUSER
 import httpx
+from arclet.alconna import Alconna, Args, Arparma, Option
 from nonebot.adapters.onebot.v11 import Bot, Message, MessageEvent, MessageSegment
+from nonebot.permission import SUPERUSER
 from nonebot.typing import T_State
 from nonebot_plugin_alconna import on_alconna
 from nonebot_plugin_alconna.uniseg import (
     At,
     Image as UniImage,
-    Text,
     Reply,
-    UniMessage,
     Segment,
+    Text,
+    UniMessage,
 )
 from nonebot_plugin_alconna.uniseg.tools import reply_fetch
 from nonebot_plugin_uninfo import Uninfo
 
 from zhenxun import ui
 from zhenxun.configs.config import Config
+from zhenxun.services import avatar_service
 from zhenxun.services.log import logger
-from zhenxun.utils.message import MessageUtils
 from zhenxun.utils.http_utils import AsyncHttpx
+from zhenxun.utils.message import MessageUtils
 
-from ..config import ensure_quote_path
+from ..config import (
+    ensure_quote_path,
+    get_quote_record_blacklist,
+    is_quote_record_blacklisted,
+)
 from ..command.manage_commands import get_available_themes
 from ..model import Quote, QuoteCardData, QuoteSequenceData, QuotedReplyData
 from ..services.ocr_service import OCRService
 from ..services.quote_service import QuoteService
 from ..utils.exceptions import ImageProcessError, NetworkError
 from ..utils.image_utils import get_img_hash
-
-from zhenxun.services import avatar_service
 
 
 def _is_simple_text_message(uni_message: UniMessage) -> bool:
@@ -382,6 +385,7 @@ async def _generate_quote_from_reply(
 
 
 MAX_RECORD_COUNT = 10
+SILENT_RECORD_BLOCK = "__quote_silent_record_block__"
 
 
 async def _generate_sequence_from_history(
@@ -626,6 +630,7 @@ async def _handle_quote_generation(
     user_variant: str | None = arp.query("style.style_name")
     count: int = arp.query("num.count", 1) if not user_variant == "classic" else 1
     is_only_author = arp.find("only")
+    is_recording = issuer_user_id is not None
 
     if count > MAX_RECORD_COUNT:
         return None, None, None, f"一次最多只能处理 {MAX_RECORD_COUNT} 条消息哦。"
@@ -641,6 +646,9 @@ async def _handle_quote_generation(
         allow_bot_record = Config.get_config("quote", "QUOTE_ALLOW_BOT_RECORD", False)
         if not allow_bot_record and str(qqid) == str(event.self_id):
             return None, None, None, "不允许记录Bot的消息。"
+
+        if is_recording and is_quote_record_blacklisted(qqid):
+            return None, None, None, SILENT_RECORD_BLOCK
 
         is_superuser = await SUPERUSER(bot, event)
         allow_self_record = Config.get_config("quote", "QUOTE_ALLOW_SELF_RECORD", False)
@@ -738,15 +746,18 @@ async def _handle_quote_generation(
         start_msg_id = int(reply.id)
         target_author_id = None
         message_history = []
+        record_blacklist = set(get_quote_record_blacklist()) if is_recording else set()
         try:
             replied_msg_info = await bot.get_msg(message_id=start_msg_id)
             anchor_seq = replied_msg_info.get("message_seq")
             if not anchor_seq:
                 return None, None, None, "获取被回复消息的序列号失败，无法处理。"
 
-            fetch_count = count
+            fetch_count = min(max(count * 3, 20), 100) if record_blacklist else count
             if is_only_author:
                 target_author_id = str(replied_msg_info["sender"]["user_id"])
+                if is_recording and target_author_id in record_blacklist:
+                    return None, None, None, SILENT_RECORD_BLOCK
                 fetch_count = min(max(count * 8, 20), 100)
 
             history_result = await bot.call_api(
@@ -771,6 +782,7 @@ async def _handle_quote_generation(
                     allow_bot_record
                     or str(msg["sender"]["user_id"]) != str(event.self_id)
                 )
+                and str(msg["sender"]["user_id"]) not in record_blacklist
                 and _is_message_renderable(msg)
             ]
 
@@ -780,6 +792,8 @@ async def _handle_quote_generation(
                     for msg in valid_messages
                     if str(msg["sender"]["user_id"]) == target_author_id
                 ][-count:]
+            elif len(valid_messages) > count:
+                valid_messages = valid_messages[-count:]
 
             valid_messages.sort(key=lambda m: m.get("time", 0))
             message_history = valid_messages
@@ -787,6 +801,8 @@ async def _handle_quote_generation(
             return None, None, None, f"获取历史消息时出错: {e}"
 
         if not message_history:
+            if record_blacklist:
+                return None, None, None, SILENT_RECORD_BLOCK
             return None, None, None, "未能获取到任何有效的历史消息。"
 
         last_message_user_id = str(message_history[-1]["sender"]["user_id"])
@@ -841,6 +857,9 @@ async def make_record_handle(
     )
 
     if error:
+        if error == SILENT_RECORD_BLOCK:
+            await make_record_cmd.finish()
+            return
         await make_record_cmd.finish(error)
         return
 

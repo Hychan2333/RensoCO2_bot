@@ -1,10 +1,13 @@
+from pathlib import Path
+
 from nonebot import get_driver
 from nonebot.plugin import PluginMetadata
 
-from zhenxun.utils.manager.priority_manager import PriorityLifecycle
-from pathlib import Path
 from zhenxun.configs.utils import PluginExtraData, RegisterConfig
+from zhenxun.services import renderer_service
 from zhenxun.services.log import logger
+from zhenxun.utils.manager.priority_manager import PriorityLifecycle
+
 from .command.manage_commands import quote_manage_cmd  # noqa: F401
 from .command.query_commands import (  # noqa: F401
     quote_stats_cmd,
@@ -16,7 +19,6 @@ from .command.upload_commands import (  # noqa: F401
     save_img_cmd,
 )
 from .config import ensure_quote_path
-from zhenxun.services import renderer_service
 
 ensure_quote_path()
 driver = get_driver()
@@ -63,7 +65,7 @@ __plugin_meta__ = PluginMetadata(
     usage="""### 📷 核心功能
 `语录` `[*关键词*]` `[*@用户*]`
 > 随机发送一条语录。可提供关键词或@用户筛选。
-> **示例**: `语录` / `语录 白丝` / `语录 @小真寻`
+> **示例**: `语录` / `语录 想吃` / `语录 @碳碳`
 
 `上传` `[图片]`
 > 上传图片作为语录。也可直接**回复**一张图片消息并发送 `上传`。
@@ -100,6 +102,15 @@ __plugin_meta__ = PluginMetadata(
 
 `语录管理 cleanup`
 > 清理已退群用户的相关语录。 (超级用户)
+
+`语录黑名单` (或 `quote blacklist list`)
+> 查看禁止被「记录」命令记录为语录的账号列表。 (超级用户)
+
+`quote blacklist add` *`@用户/QQ号`* `...`
+> 添加账号到语录记录黑名单，被加入的账号无法被记录为语录。 (超级用户)
+
+`quote blacklist remove` *`@用户/QQ号`* `...`
+> 从语录记录黑名单移除账号。 (超级用户)
     """,
     type="application",
     homepage="https://github.com/webjoin111/zhenxun_plugin_quote",
@@ -171,6 +182,14 @@ __plugin_meta__ = PluginMetadata(
                 value=False,
                 help="是否允许记录Bot本身发送的消息。",
                 default_value=False,
+            ),
+            RegisterConfig(
+                module="quote",
+                key="QUOTE_RECORD_BLACKLIST",
+                value=[],
+                help="禁止被「记录」命令记录为语录的账号ID列表。",
+                default_value=[],
+                type=list[str],
             ),
             RegisterConfig(
                 module="quote",
