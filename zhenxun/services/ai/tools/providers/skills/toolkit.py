@@ -1,22 +1,24 @@
 from typing import Any, cast
 
-from zhenxun.services.ai.run import Inject, RunContext
+from zhenxun.services.ai.run.context import RunContext
+from zhenxun.services.ai.run.di import Inject
 from zhenxun.services.ai.sandbox.models import SandboxBlueprint
 from zhenxun.services.ai.sandbox.protocols import (
     SupportsCommandExecution,
     SupportsFileSystem,
 )
-from zhenxun.services.ai.tools.core.decorators import silent, tool
+from zhenxun.services.ai.tools.core.decorators import Rules, tool
 from zhenxun.services.ai.tools.core.toolkit import BaseToolkit
 from zhenxun.services.ai.tools.models import ResolvedToolPayload, ToolResult
-from zhenxun.services.ai.tools.providers.skills.manager import (
+from zhenxun.services.ai.utils.logger import log_tool as logger
+from zhenxun.utils.pydantic_compat import model_copy
+from zhenxun.utils.utils import infer_plugin_namespace
+
+from .manager import (
     skill_env_manager,
     skill_manager,
 )
-from zhenxun.services.ai.tools.providers.skills.models import Skill
-from zhenxun.services.log import logger
-from zhenxun.utils.pydantic_compat import model_copy
-from zhenxun.utils.utils import infer_plugin_namespace
+from .models import Skill
 
 
 class SkillSandboxExecutionMixin:
@@ -211,8 +213,8 @@ class SkillMetaToolkit(BaseToolkit, SkillSandboxExecutionMixin):
     @tool(
         name="read_skill_instructions",
         description="加载指定技能的完整使用说明与可用资源清单。返回值为 XML 结构。",
+        rules=[Rules.silent()],
     )
-    @silent()
     async def read_skill_instructions(self, skill_name: str) -> ToolResult:
         skill = await self._get_skill(skill_name)
         if not skill:
@@ -261,8 +263,8 @@ class SkillMetaToolkit(BaseToolkit, SkillSandboxExecutionMixin):
             "安全读取指定技能目录下的附加文件"
             "（如 references/ 里的参考文档或 scripts/ 里的代码）。"
         ),
+        rules=[Rules.silent()],
     )
-    @silent()
     async def read_skill_file(
         self,
         skill_name: str,

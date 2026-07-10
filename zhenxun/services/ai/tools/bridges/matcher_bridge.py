@@ -20,12 +20,13 @@ from pydantic import BaseModel
 
 from zhenxun.services.ai.core.exceptions import ToolRetryError
 from zhenxun.services.ai.core.models import ToolDefinition
-from zhenxun.services.ai.run import RunContext
+from zhenxun.services.ai.run.context import RunContext
 from zhenxun.services.ai.tools.core.schema import build_schema_hint
 from zhenxun.services.ai.tools.core.tool import BaseTool
 from zhenxun.services.ai.tools.models import EndRunResult, ToolOptions, ToolResult
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_tool as logger
 from zhenxun.utils.pydantic_compat import model_validate
+from zhenxun.utils.utils import infer_plugin_namespace
 
 
 class MatcherAdapter(ABC):
@@ -37,6 +38,14 @@ class MatcherAdapter(ABC):
         args_schema: type[BaseModel] | None,
         command_formatter: Callable[[Any], list[Any] | str] | None = None,
     ):
+        """
+        初始化 Matcher 桥接适配器。
+
+        参数:
+            matcher: 目标 Matcher 类，负责实际接收 Fake State 并执行命令。
+            args_schema: 描述 LLM 需要填写的参数 Pydantic Schema，可以为 None。
+            command_formatter: 可选的自定义命令行格式化器，将参数序列化为命令行参数。
+        """
         self.matcher = matcher
         self.args_schema = args_schema
         self.command_formatter = command_formatter
@@ -314,6 +323,17 @@ class MatcherTool(BaseTool):
         args_schema: type[BaseModel] | None,
         terminal: bool = True,
     ):
+        """
+        初始化通用状态机穿透工具。
+
+        参数:
+            matcher: 目标 Matcher 类，由 nonebot 装饰器创建的指令匹配器。
+            adapter: 对应的 MatcherAdapter 桥接适配器，用于构建 Fake State。
+            name: 工具的唯一标识名称（仅限英文字母、数字及下划线）。
+            description: 工具的职责说明，指导大模型选用此工具。
+            args_schema: 描述 LLM 需要填写的参数 Pydantic Schema，可以为 None。
+            terminal: 是否为终端工具，若为 True 则执行完毕后立即中断大模型循环，默认 True。
+        """  # noqa: E501
         self.matcher = matcher
         self.adapter = adapter
         self.terminal = terminal
@@ -351,7 +371,8 @@ class MatcherTool(BaseTool):
 
         if not bot or not event:
             return ToolResult(
-                output="上下文缺少 bot 或 event，无法执行 Matcher"
+                output="❌ 当前处于无状态的自动化后台环境，缺乏真实的用户上下文(Event),"
+                "严禁调用该原生平台指令工具！请换用其他方法解决。"
             ).as_error()
 
         try:
@@ -429,8 +450,6 @@ def bind_matcher(
     """
 
     if require_prefix:
-        from zhenxun.utils.utils import infer_plugin_namespace
-
         ns = infer_plugin_namespace(default="global")
         if ns and ns not in ("global", "unknown"):
             if not name.startswith(f"{ns}_"):

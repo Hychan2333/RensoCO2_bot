@@ -1,19 +1,27 @@
 import asyncio
 from collections.abc import Callable
+import json
 from typing import Any
 
 from aiocache import SimpleMemoryCache
 
+from zhenxun.configs.config import Config
 from zhenxun.services.ai.capabilities import (
     AbstractCapability,
     WrapToolExecuteHandler,
     WrapToolValidateHandler,
 )
-from zhenxun.services.ai.run import RunContext
+from zhenxun.services.ai.core.exceptions import (
+    NeedsInputException,
+    ToolFatalError,
+    ToolRetryError,
+)
+from zhenxun.services.ai.run.context import RunContext
 from zhenxun.services.ai.run.di import DependencyInjector
+from zhenxun.services.ai.run.hitl import HITLController
 from zhenxun.services.ai.tools.models import ToolResult
 from zhenxun.services.ai.utils import PermissionUtils
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_tool as logger
 from zhenxun.utils.pydantic_compat import model_dump, parse_as
 
 _TOOL_RESULT_CACHE = SimpleMemoryCache(namespace="zhenxun_tool_cache")
@@ -50,7 +58,7 @@ class CacheCapability(AbstractCapability):
         if not hasattr(tool, "_generate_cache_key"):
             return await handler(arguments)
 
-        cache_key = tool._generate_cache_key(arguments)
+        cache_key = getattr(tool, "_generate_cache_key")(arguments)
         cached_data = await _TOOL_RESULT_CACHE.get(cache_key)
         if cached_data is not None:
             cached_result = (
@@ -99,8 +107,6 @@ class ApprovalCapability(AbstractCapability):
         if tool is None:
             return await handler(arguments)
 
-        import json
-
         args_str = json.dumps(arguments, ensure_ascii=False, indent=2)
         confirm_msg = f"即将在本地执行高危工具 [{tool_name}]\n参数：\n{args_str}"
 
@@ -110,8 +116,6 @@ class ApprovalCapability(AbstractCapability):
 
         await hitl_lock.acquire()
         try:
-            from zhenxun.services.ai.run.hitl import HITLController
-
             hitl = HITLController(context)
             await hitl.ask_confirm(f"⚠️ **安全交互审批**\n\n{confirm_msg}", timeout=60.0)
             logger.info(f"🛡️ [HITL] 工具 {tool_name} 审批通过。")
@@ -275,8 +279,6 @@ class ConfigDependencyCapability(AbstractCapability):
     async def prepare_tools(
         self, context: RunContext, tool_defs: list[Any]
     ) -> list[Any]:
-        from zhenxun.configs.config import Config
-
         if Config.get_config(self.module, self.key) == self.expected_value:
             return tool_defs
         return []
@@ -292,12 +294,6 @@ class InteractiveCapability(AbstractCapability):
         args: str | dict[str, Any],
         handler: WrapToolValidateHandler,
     ) -> dict[str, Any]:
-        from zhenxun.services.ai.core.exceptions import (
-            NeedsInputException,
-            ToolFatalError,
-            ToolRetryError,
-        )
-
         tool = context.call.current_tool
         current_kwargs = dict(args) if isinstance(args, dict) else args
 
@@ -322,8 +318,6 @@ class InteractiveCapability(AbstractCapability):
                     "请发送文本补充，或回复“取消”中止。"
                 )
                 try:
-                    from zhenxun.services.ai.run.hitl import HITLController
-
                     hitl = HITLController(context)
                     user_input = await hitl.ask_text(prompt_msg, timeout=60.0)
                 except ToolFatalError:

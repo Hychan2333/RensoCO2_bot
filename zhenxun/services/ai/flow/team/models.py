@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Callable, Sequence
 from enum import Enum
 from typing import Any
@@ -7,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from zhenxun.services.ai.core.messages import AgentMessage
 from zhenxun.services.ai.core.options import BaseOutputDefinition
-from zhenxun.services.ai.flow.base import BaseRuntimeConfig
+from zhenxun.services.ai.flow.base import BaseRunnable, BaseRuntimeConfig
+from zhenxun.services.ai.run import AgentTask
 
 
 class TeamRuntimeConfig(BaseRuntimeConfig):
@@ -45,7 +48,7 @@ class Transition(BaseModel):
     trigger_regex: str | None = None
     """(可选) 正则表达式。
     如果用户的输入匹配此正则，将触发极速硬路由，跳过大模型思考。"""
-    trigger_func: Callable[..., Any] | None = None
+    trigger_func: Callable[..., bool | str | None] | None = None
     """(可选) 自定义校验函数。返回 True 或目标名称时触发硬路由。支持依赖注入。"""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -62,9 +65,9 @@ class CallAction(TeamAction):
     调度动作：呼叫指定的 Agent 执行任务
     """
 
-    agent: str | Any
+    agent: str | BaseRunnable[Any]
     """目标 Agent 的名称（字符串）或动态生成的 Agent 实例"""
-    task: str | Any
+    task: str | AgentTask
     """派发给该 Agent 的具体任务或提示词"""
     history: Sequence[AgentMessage] | None = None
     """需要传递给该 Agent 的上下文历史记录（可选）"""
@@ -78,6 +81,7 @@ class ConcurrentCallAction(TeamAction):
     """
 
     actions: list[CallAction]
+    """并发执行的呼叫动作列表"""
 
 
 class FinishAction(TeamAction):
@@ -108,13 +112,21 @@ class SubTaskRecord(BaseModel):
     """单条子任务（工单）数据契约"""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    """子任务的唯一标识 ID"""
     title: str = ""
+    """子任务标题"""
     description: str = ""
+    """子任务的具体描述"""
     assignee: str | None = None
+    """执行该任务的指派成员 Agent 名称"""
     dependencies: list[str] = Field(default_factory=list)
+    """该任务依赖的前置任务 ID 列表"""
     status: TaskNodeStatus = TaskNodeStatus.pending
+    """任务的当前执行状态"""
     result: str | None = None
+    """任务执行结果或输出信息"""
     notes: list[str] = Field(default_factory=list)
+    """执行过程中的追加备注或错误记录"""
     metadata: dict[str, Any] = Field(default_factory=dict)
     """附加元数据，供系统底层或第三方插件挂载隐式上下文，对大模型不可见"""
 
@@ -126,8 +138,11 @@ class TaskBoardState(BaseModel):
     """
 
     tasks: list[SubTaskRecord] = Field(default_factory=list)
+    """看板中存储的所有子任务记录列表"""
     is_goal_complete: bool = False
+    """团队的终极目标是否已宣告完成"""
     final_summary: str | None = None
+    """目标完成后的终结总结报告"""
 
     def create_task(
         self,
@@ -151,6 +166,7 @@ class TaskBoardState(BaseModel):
         return task
 
     def get_task(self, task_id: str) -> SubTaskRecord | None:
+        """根据 ID 或标题获取对应的子任务记录"""
         return next(
             (t for t in self.tasks if t.id == task_id or t.title == task_id), None
         )
@@ -158,6 +174,7 @@ class TaskBoardState(BaseModel):
     def update_task_status(
         self, task_id: str, status: TaskNodeStatus, result: str | None = None
     ) -> SubTaskRecord | None:
+        """更新指定任务的状态以及执行结果"""
         task = self.get_task(task_id)
         if not task:
             return None
@@ -221,7 +238,7 @@ class TaskBoardState(BaseModel):
         return available
 
     def all_terminal(self) -> bool:
-        """判断是否所有的任务都已经进入了终结状态（完成或失败）"""
+        """检查是否所有的任务均已进入终结状态（已完成或已失败）"""
         if not self.tasks:
             return False
         return all(

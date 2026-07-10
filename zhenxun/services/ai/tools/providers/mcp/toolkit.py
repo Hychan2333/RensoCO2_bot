@@ -17,13 +17,13 @@ from pydantic import ValidationError
 
 from zhenxun.services.ai.core.models import ToolDefinition
 from zhenxun.services.ai.core.stream_events import UserCustomEvent
-from zhenxun.services.ai.run import RunContext
+from zhenxun.services.ai.run.context import RunContext
 from zhenxun.services.ai.sandbox.addons.base import BaseMcpProxyExtension
 from zhenxun.services.ai.sandbox.models import SandboxBlueprint
 from zhenxun.services.ai.tools.core.tool import BaseTool
 from zhenxun.services.ai.tools.core.toolkit import BaseToolkit
 from zhenxun.services.ai.tools.models import ToolkitConfig, ToolResult
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_tool as logger
 from zhenxun.utils.lifespan import LifespanManager
 from zhenxun.utils.pydantic_compat import model_dump
 
@@ -120,6 +120,16 @@ class MCPRemoteTool(BaseTool):
         parameters: dict,
         toolkit: "MCPToolkit",
     ):
+        """
+        初始化远端 MCP 工具在本地的代理对象。
+
+        参数:
+            name: 工具在本地注册的唯一标识名称。
+            original_tool_name: 该工具在远端 MCP 服务器上的原始名称。
+            description: 工具的描述信息，用于指导大模型选用此工具。
+            parameters: 工具参数的 JSON 模式描述。
+            toolkit: 所属的 MCPToolkit 工具箱实例。
+        """
         super().__init__(name=name, description=description)
         self.original_tool_name = original_tool_name
         self.parameters = parameters
@@ -132,7 +142,7 @@ class MCPRemoteTool(BaseTool):
 
     @property
     def effective_ttl(self) -> float:
-        """动态获取当前最新的 TTL 配置，支持无缝热重载"""
+        """获取当前工具关联的有效生存期 TTL"""
         try:
             from zhenxun.services.ai.config import get_llm_config
 
@@ -260,10 +270,10 @@ class MCPToolkit(BaseToolkit):
         command: str | None = None,
         args: list[str] | None = None,
         url: str | None = None,
+        headers: dict[str, str] | None = None,
         env: dict | None = None,
         cwd: str | None = None,
         install_command: str | None = None,
-        isolation: Literal["shared", "per_session"] = "shared",
         timeout: int = 30,
         admin_level: int = 0,
         header_provider: Callable[[RunContext], dict[str, str]] | None = None,
@@ -272,6 +282,28 @@ class MCPToolkit(BaseToolkit):
         sandbox_session_id: str | None = None,
         sandbox_blueprint: SandboxBlueprint | None = None,
     ):
+        """
+        初始化模型上下文协议 (MCP) 的工具箱封装。
+
+        参数:
+            server_name: MCP 服务器的唯一标识名称。
+            prefix: 工具名称的前缀，防止工具命名冲突。
+            transport: 连接 MCP 服务器的通信传输协议，可选 "stdio", "sse", "streamable-http", "sandbox_proxy"。
+            command: 用于 stdio 或 sandbox_proxy 模式启动服务器的可执行命令。
+            args: 启动服务器时附加的命令行参数。
+            url: 用于 sse 或 streamable-http 模式的服务器连接 URL。
+            headers: 静态配置的 HTTP 请求头。
+            env: 启动服务器时的进程环境变量。
+            cwd: 启动服务器时的进程工作目录。
+            install_command: 首次启动前执行的环境热装配/依赖安装命令。
+            timeout: 初始化和请求网络接口时的超时秒数，默认 30。
+            admin_level: 调用工具所需的管理权限等级，默认 0 (无限制)。
+            header_provider: 动态生成 HTTP 头部信息的工厂函数。
+            env_provider: 动态生成进程环境变量的工厂函数。
+            ttl: 闲置清理的生存时间 (秒)，默认 600。
+            sandbox_session_id: 当 transport 为 sandbox_proxy 时指定的沙箱会话 ID。
+            sandbox_blueprint: 用于沙箱自动装配的环境蓝图配置。
+        """  # noqa: E501
         super().__init__(
             config=ToolkitConfig(prefix=prefix) if prefix is not None else None
         )
@@ -280,6 +312,7 @@ class MCPToolkit(BaseToolkit):
         self.command = command
         self.args = args or []
         self.url = url
+        self.headers = headers or {}
         self.env = env or {}
         self.cwd = cwd
         self.install_command = install_command
@@ -304,7 +337,7 @@ class MCPToolkit(BaseToolkit):
 
     @property
     def effective_ttl(self) -> float:
-        """动态获取当前最新的 TTL 配置，支持无缝热重载"""
+        """获取当前工具箱的有效闲置生存期 TTL"""
         try:
             from zhenxun.services.ai.config import get_llm_config
 
@@ -314,7 +347,7 @@ class MCPToolkit(BaseToolkit):
             return 31536000.0 if self.ttl <= 0 else float(self.ttl)
 
     async def _run_install_command(self, force: bool = False):
-        """执行环境预安装（热加载依赖）"""
+        """在本地运行预热依赖安装命令以准备 MCP 服务器环境"""
         if not self.install_command or not self.cwd:
             return
 
@@ -366,6 +399,7 @@ class MCPToolkit(BaseToolkit):
     async def get_session(
         self, context: RunContext | None = None
     ) -> ClientSession | None:
+        """获取或建立与 MCP 服务器的会话连接，并刷新其生存状态"""
         await self.lifespan_manager.register(
             self.server_name,
             ttl=self.effective_ttl,
@@ -376,8 +410,7 @@ class MCPToolkit(BaseToolkit):
         return self._shared_session
 
     async def _spawn_session_task(self, dynamic_headers: dict, dynamic_env: dict):
-        """生成后台连接任务"""
-
+        """在后台异步拉起 MCP 传输协议通道并进行服务初始化"""
         max_attempts = 2 if (self.transport == "stdio" and self.install_command) else 1
 
         try:
@@ -546,6 +579,7 @@ class MCPToolkit(BaseToolkit):
             self._ready_event.set()
 
     async def initialize(self, context: RunContext | None = None):
+        """清空当前工具集并异步执行 MCP 服务端的全套初始化流程"""
         if self._is_initialized:
             return
 
@@ -554,8 +588,13 @@ class MCPToolkit(BaseToolkit):
         self._ready_event.clear()
         self._init_exception = None
 
-        dynamic_headers = {}
+        dynamic_headers = self.headers.copy()
+        if self.header_provider and context:
+            dynamic_headers.update(self.header_provider(context))
+
         dynamic_env = self.env.copy()
+        if self.env_provider and context:
+            dynamic_env.update(self.env_provider(context))
 
         self._shared_task = asyncio.create_task(
             self._spawn_session_task(dynamic_headers, dynamic_env)
@@ -584,6 +623,7 @@ class MCPToolkit(BaseToolkit):
         await self.close()
 
     async def close(self):
+        """彻底关闭 MCP 工具箱，注销生存期并释放底层 WebSocket/进程通道"""
         current_task = asyncio.current_task()
 
         if (

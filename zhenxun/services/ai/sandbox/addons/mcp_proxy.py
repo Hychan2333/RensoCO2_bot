@@ -7,22 +7,27 @@ from anyio import create_memory_object_stream, create_task_group
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage
 
-from zhenxun.services.ai.sandbox.addons.base import BaseMcpProxyExtension
 from zhenxun.services.ai.sandbox.protocols import SupportsStreamExecution
 from zhenxun.services.ai.sandbox.registry import SandboxRegistry
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_sandbox as logger
 from zhenxun.utils.pydantic_compat import model_dump_json, model_validate
+
+from .base import BaseMcpProxyExtension
 
 
 class UniversalMcpExtension(BaseMcpProxyExtension):
+    """通用 MCP 代理扩展类，用于在沙箱内连接 MCP 服务"""
+
     @property
     def extension_name(self) -> str:
+        """获取 MCP 代理扩展的唯一名称"""
         return "universal_mcp"
 
     @asynccontextmanager
     async def connect_mcp(
         self, command: str, args: list[str], env: dict[str, str] | None = None
     ) -> AsyncGenerator[tuple[Any, Any], None]:
+        """启动沙箱内的 MCP 服务器，并建立与之进行 JSON-RPC 通信的双向内存流管道"""
         if not isinstance(self.session, SupportsStreamExecution):
             raise RuntimeError(
                 "当前沙箱驱动不支持流式后台进程执行 (SupportsStreamExecution)，"

@@ -1,29 +1,17 @@
 import asyncio
-from typing import Any, Protocol
+from typing import Any
 
 from zhenxun.services.ai.core.stream_events import ToolStreamChunkEvent, UserCustomEvent
-from zhenxun.services.ai.run import Inject, RunContext
+from zhenxun.services.ai.run.context import RunContext
+from zhenxun.services.ai.run.di import Inject
 from zhenxun.services.ai.sandbox.models import (
     SandboxBlueprint,
-    SandboxExecutionResult,
 )
-from zhenxun.services.ai.tools.core.decorators import silent, tool
+from zhenxun.services.ai.tools.core.decorators import Rules, tool
 from zhenxun.services.ai.tools.core.toolkit import BaseToolkit
 from zhenxun.services.ai.tools.models import ToolResult
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_tool as logger
 from zhenxun.utils.pydantic_compat import model_copy
-
-
-class PythonPluginProtocol(Protocol):
-    @property
-    def supports_state(self) -> bool: ...
-
-    async def execute(
-        self,
-        code: str,
-        timeout: int = 30,
-        injected_code: str | None = None,
-    ) -> SandboxExecutionResult: ...
 
 
 class SandboxToolkit(BaseToolkit):
@@ -115,8 +103,8 @@ class SandboxToolkit(BaseToolkit):
 
         bp = model_copy(self.blueprint, deep=True)
 
-        if context.run.event_bus:
-            await context.run.event_bus.emit(
+        if context:
+            await context.run.emit(
                 ToolStreamChunkEvent(
                     tool_name="Sandbox", content="正在分析代码依赖并分配沙箱环境..."
                 )
@@ -134,8 +122,8 @@ class SandboxToolkit(BaseToolkit):
             )
             context.session.shared_state[state_key] = code_executor
 
-        if context.run.event_bus:
-            await context.run.event_bus.emit(
+        if context:
+            await context.run.emit(
                 ToolStreamChunkEvent(
                     tool_name="Sandbox",
                     content=f"沙箱已就绪，正在后台执行 {language} 代码...",
@@ -237,8 +225,8 @@ class SandboxToolkit(BaseToolkit):
         result = ToolResult(
             output=final_output if len(final_output) > 1 else final_output_text
         )
-        if len(image_bytes_list) > 0 and context and context.run.event_bus:
-            await context.run.event_bus.emit(UserCustomEvent(display=final_output))
+        if len(image_bytes_list) > 0 and context:
+            await context.run.emit(UserCustomEvent(display=final_output))
         return result
 
     @tool(
@@ -261,8 +249,8 @@ class SandboxToolkit(BaseToolkit):
     ) -> ToolResult:
         session_id = self.sandbox_session_id or context.session_id or "default"
 
-        if context.run.event_bus:
-            await context.run.event_bus.emit(
+        if context:
+            await context.run.emit(
                 ToolStreamChunkEvent(
                     tool_name="Sandbox", content=f"正在虚拟终端执行命令: {command} ..."
                 )
@@ -331,8 +319,8 @@ class SandboxToolkit(BaseToolkit):
         await asyncio.sleep(1.5)
         output = await interactive_session.read_output(timeout=5)
 
-        if context and context.run.event_bus:
-            await context.run.event_bus.emit(
+        if context:
+            await context.run.emit(
                 ToolStreamChunkEvent(
                     tool_name=context.call.tool_name, content="⌨️ 已向后台进程发送输入"
                 )
@@ -369,8 +357,8 @@ class SandboxToolkit(BaseToolkit):
         await interactive_session.interrupt()
         await asyncio.sleep(1)
         output = await interactive_session.read_output()
-        if context and context.run.event_bus:
-            await context.run.event_bus.emit(
+        if context:
+            await context.run.emit(
                 ToolStreamChunkEvent(
                     tool_name=context.call.tool_name, content="🛑 已强制中断后台进程"
                 )
@@ -383,8 +371,8 @@ class SandboxToolkit(BaseToolkit):
     @tool(
         name="write_sandbox_file",
         description="将文本内容写入沙箱文件系统中，支持保存大块数据或配置，避免超过对话上下文。",
+        rules=[Rules.silent()],
     )
-    @silent()
     async def write_sandbox_file(
         self, path: str, content: str, context: RunContext, sandbox: Inject.Sandbox
     ) -> ToolResult:
@@ -405,8 +393,8 @@ class SandboxToolkit(BaseToolkit):
     @tool(
         name="read_sandbox_file",
         description="从沙箱文件系统中读取指定文件的文本内容。",
+        rules=[Rules.silent()],
     )
-    @silent()
     async def read_sandbox_file(
         self, path: str, context: RunContext, sandbox: Inject.Sandbox
     ) -> ToolResult:

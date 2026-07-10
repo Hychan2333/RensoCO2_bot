@@ -6,13 +6,14 @@ import asyncio
 from contextlib import asynccontextmanager
 import inspect
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import json_repair
 from nonebot.adapters import Message as PlatformMessage
 
 from zhenxun.services.ai.capabilities import CombinedCapability
 from zhenxun.services.ai.core.exceptions import (
+    ControlFlowExit,
     ToolFatalError,
     ToolRetryError,
 )
@@ -24,18 +25,20 @@ from zhenxun.services.ai.core.stream_events import (
     ToolStreamChunkEvent,
     UserCustomEvent,
 )
-from zhenxun.services.ai.run.context import RunContext
+from zhenxun.services.ai.message_builder import MessageBuilder
+from zhenxun.services.ai.run.context import RunContext, set_run_context
 from zhenxun.services.ai.run.di import DependencyInjector
+from zhenxun.services.ai.tools.core.tool import BaseTool, register_tool_runner
 from zhenxun.services.ai.tools.models import (
+    StateSyncResult,
     ToolOptions,
     ToolResult,
+    ToolResultChunk,
     ValidatedToolCall,
 )
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_tool as logger
 
-if TYPE_CHECKING:
-    from zhenxun.services.ai.tools.core.tool import BaseTool
-    from zhenxun.services.ai.tools.engine.registry import ToolCollection
+from .registry import ToolCollection
 
 
 class ToolExecutor:
@@ -45,6 +48,7 @@ class ToolExecutor:
     """
 
     def __init__(self):
+        """初始化工具执行器。"""
         pass
 
     def _get_combined_capability(
@@ -122,8 +126,7 @@ class ToolExecutor:
                                 arguments, parsed_successfully = parsed, True
                                 logger.debug(
                                     "⚒️ 成功修复损坏的工具参数: "
-                                    f"{args_str} -> {repaired_str}",
-                                    "ToolExecutor",
+                                    f"{args_str} -> {repaired_str}"
                                 )
                         except Exception:
                             pass
@@ -141,11 +144,9 @@ class ToolExecutor:
         tool_name: str,
         executable: Any,
         event_bus: EventBus | None,
-        available_tools: "ToolCollection | dict[str, Any] | None" = None,
+        available_tools: ToolCollection | dict[str, Any] | None = None,
     ) -> RunContext:
         """准备/克隆工具调用所使用的隔离 RunContext"""
-        from zhenxun.services.ai.run import RunContext
-
         safe_context = (
             context.clone_for_tool_call(tool_call_id, tool_name)
             if context
@@ -161,7 +162,7 @@ class ToolExecutor:
     async def validate_tool_call(
         self,
         tool_call: ToolCallPart,
-        available_tools: "ToolCollection | dict[str, Any] | None",
+        available_tools: ToolCollection | dict[str, Any] | None,
         context: RunContext | None = None,
         event_bus: EventBus | None = None,
     ) -> ValidatedToolCall:
@@ -211,8 +212,6 @@ class ToolExecutor:
 
         async def inner_validate(args_inner):
             if isinstance(args_inner, dict) and hasattr(executable, "validate_args"):
-                import inspect
-
                 sig = inspect.signature(executable.validate_args)
                 if "context" in sig.parameters:
                     return await executable.validate_args(
@@ -245,7 +244,7 @@ class ToolExecutor:
     async def execute_tool_call(
         self,
         validated: ValidatedToolCall,
-        available_tools: "ToolCollection | dict[str, Any] | None",
+        available_tools: ToolCollection | dict[str, Any] | None,
         context: RunContext | None = None,
         model_name: str | None = None,
         max_retries: int = 0,
@@ -256,8 +255,6 @@ class ToolExecutor:
             available_tools = {}
         tool_name = validated.call.tool_name
         if not validated.args_valid or validated.tool is None:
-            from zhenxun.services.ai.core.exceptions import ControlFlowExit
-
             if isinstance(validated.validation_error, ControlFlowExit):
                 raise validated.validation_error
 
@@ -285,8 +282,6 @@ class ToolExecutor:
             available_tools,
         )
 
-        from zhenxun.services.ai.run.context import set_run_context
-
         combined_cap = self._get_combined_capability(executable, safe_context)
 
         async def inner_handler(args_inner: dict) -> Any:
@@ -303,16 +298,12 @@ class ToolExecutor:
                     if not isinstance(result, ToolResult):
                         result = ToolResult(output=result)
 
-                    from zhenxun.services.ai.tools.models import StateSyncResult
-
                     if isinstance(result, StateSyncResult) and result.state_notice:
                         if safe_context:
                             safe_context.run.add_system_prompt(
                                 f"[系统通知(状态同步)]：{result.state_notice}"
                             )
                 except BaseException as e:
-                    from zhenxun.services.ai.core.exceptions import ControlFlowExit
-
                     if isinstance(e, ControlFlowExit):
                         raise e
                     if isinstance(e, asyncio.CancelledError):
@@ -326,7 +317,7 @@ class ToolExecutor:
     async def execute_batch(
         self,
         tool_calls: list[ToolCallPart],
-        available_tools: "ToolCollection | dict[str, Any] | None",
+        available_tools: ToolCollection | dict[str, Any] | None,
         context: RunContext | None = None,
         model_name: str | None = None,
         max_retries: int = 0,
@@ -394,8 +385,6 @@ class ToolExecutor:
             func_name = original_call.tool_name
 
             if isinstance(result_pair, BaseException):
-                from zhenxun.services.ai.core.exceptions import ControlFlowExit
-
                 if isinstance(result_pair, ControlFlowExit):
                     raise result_pair
                 if isinstance(result_pair, asyncio.CancelledError):
@@ -421,11 +410,12 @@ class ToolExecutor:
 
 class ToolExecutionPolicy:
     """
-    工具执行策略 (Strategy Pattern)。
+    工具执行策略。
     负责解析工具私有配置与系统全局配置，决定最大重试次数、Fallback 路由目标等流转行为。
     """
 
     def __init__(self, tool: BaseTool, global_max_retries: int = 0):
+        """初始化工具执行策略。"""
         self.tool = tool
         self.settings: ToolOptions = getattr(tool, "settings", ToolOptions())
         self.metadata: dict[str, Any] = (
@@ -438,8 +428,6 @@ class ToolExecutionPolicy:
         """
         计算当前工具的绝对最大重试次数。
         优先使用工具级配置 (ToolOptions.max_retries)，如果未设置，则使用全局配置。
-        由于重试机制是保证 Agent 稳定性的防线，
-        即使全局为 0，底层默认也会给予至少 1 次的机会。
         """
         tool_retries = getattr(self.settings, "max_retries", None)
         if tool_retries is not None:
@@ -457,6 +445,7 @@ class ToolRunner(ABC):
     async def run(
         self, tool: BaseTool, context: RunContext, **kwargs: Any
     ) -> ToolResult:
+        """执行工具调用的抽象方法。"""
         pass
 
 
@@ -469,6 +458,7 @@ class NativeToolRunner(ToolRunner):
     async def run(
         self, tool: BaseTool, context: RunContext, **kwargs: Any
     ) -> ToolResult:
+        """运行原生 Python 函数工具并返回结果。"""
         target_func = tool.get_execute_target()
         signature_target = tool.get_signature_target()
 
@@ -496,8 +486,6 @@ class NativeToolRunner(ToolRunner):
                 if isinstance(chunk, ToolResult):
                     res = chunk
                 else:
-                    from zhenxun.services.ai.tools.models import ToolResultChunk
-
                     chunk_obj = (
                         chunk
                         if isinstance(chunk, ToolResultChunk)
@@ -508,8 +496,8 @@ class NativeToolRunner(ToolRunner):
                         if tool and hasattr(tool, "settings")
                         else False
                     )
-                    if context.run.event_bus and not is_silent:
-                        await context.run.event_bus.emit(
+                    if not is_silent:
+                        await context.run.emit(
                             ToolStreamChunkEvent(
                                 tool_name=tool.name,
                                 content=chunk_obj.content,
@@ -525,23 +513,18 @@ class NativeToolRunner(ToolRunner):
             final_result = res
         else:
             if str(type(res)).find("Message") != -1:
-                from zhenxun.services.ai.message_builder import MessageBuilder
-
                 uni_msg = (
                     MessageBuilder.message_to_unimessage(res)
                     if isinstance(res, PlatformMessage)
                     else res
                 )
                 parts = await MessageBuilder.unimsg_to_llm_parts(uni_msg)
-                if context and context.run.event_bus:
-                    await context.run.event_bus.emit(UserCustomEvent(display=uni_msg))
+                await context.run.emit(UserCustomEvent(display=uni_msg))
                 final_result = ToolResult(output=parts)
             else:
                 final_result = ToolResult(output=res)
 
         return final_result
 
-
-from zhenxun.services.ai.tools.core.tool import register_tool_runner
 
 register_tool_runner(NativeToolRunner)

@@ -47,11 +47,11 @@ from zhenxun.services.ai.core.messages import (
     ThoughtPart,
 )
 from zhenxun.services.ai.core.models import ModelIdentity
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_llm as logger
 from zhenxun.utils.log_sanitizer import sanitize_for_logging
 
 if TYPE_CHECKING:
-    from zhenxun.services.ai.llm.adapters.handlers.base import (
+    from .handlers.base import (
         BaseAudioHandler,
         BaseEmbeddingHandler,
         BaseImageHandler,
@@ -64,20 +64,30 @@ class RequestData(BaseModel):
     """标准化的请求载体，用于向上层 HTTP 客户端传递请求参数。"""
 
     method: str = "POST"
+    """请求的 HTTP 方法，默认 'POST'"""
     url: str
+    """请求的目标 HTTP URL"""
     headers: dict[str, str]
+    """请求的 HTTP 头部键值对"""
     body: dict[str, Any]
+    """请求的 HTTP 载荷体 JSON 字典"""
     files: dict[str, Any] | list[tuple[str, Any]] | None = None
+    """要上传的多媒体或二进制文件字典"""
 
 
 class ResponseData(BaseModel):
     """标准化的响应载体，统一承接文本、多模态与附加元数据。"""
 
     content_parts: list[LLMContentPart] = Field(default_factory=list)
+    """大模型生成的结构化内容片段列表（如文本、图片、工具调用）"""
     usage_info: dict[str, Any] | None = None
+    """底层 API Token 消耗使用统计字典"""
     raw_response: dict[str, Any] | None = None
+    """接口返回的原始 JSON 响应字典"""
     grounding_metadata: Any | None = None
+    """Gemini 等模型特有的 Grounding 搜索依据元数据"""
     cache_info: Any | None = None
+    """接口缓存的命中与生成情况等元数据"""
 
     @property
     def text(self) -> str:
@@ -486,8 +496,7 @@ class BaseAdapter(ABC):
     async def parse_speech_response(
         self, identity: ModelIdentity, raw_response: httpx.Response
     ) -> AudioResponse:
-        """解析语音响应并委派给 `audio_handler`。
-        注意传入的是 httpx.Response 的 raw 对象"""
+        """解析语音响应并委派给 `audio_handler`"""
         if self.audio_handler:
             return await self.audio_handler.parse_speech_response(
                 adapter=self, identity=identity, raw_response=raw_response

@@ -8,7 +8,9 @@ from typing import Any, Literal, TypeVar, overload
 from pydantic import BaseModel
 
 from zhenxun.services.ai.core.exceptions import (
+    ControlFlowExit,
     LLMException,
+    ModelRetry,
     UpstreamServerException,
     get_user_friendly_error_message,
 )
@@ -33,10 +35,10 @@ from zhenxun.services.ai.core.options import (
     TTSConfig,
 )
 from zhenxun.services.ai.guardrails import GuardrailSource
-from zhenxun.services.ai.llm.engine.router import LLMOrchestrator
-from zhenxun.services.log import logger
+from zhenxun.services.ai.utils.logger import log_llm as logger
 
 from .builder import IntentBuilder
+from .engine.router import LLMOrchestrator
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -336,7 +338,7 @@ async def generate_structured(
             raise LLMException("结构化输出失败：中间件未返回解析后的对象。")
 
         return response.parsed_obj
-    except LLMException as e:
+    except (LLMException, ModelRetry, ControlFlowExit) as e:
         raise e.with_traceback(None) from None
     except Exception as e:
         friendly_msg = get_user_friendly_error_message(e)
@@ -406,7 +408,7 @@ async def generate(
             return await LLMOrchestrator.invoke(
                 request, model_name=model, task="chat", override_config=resolved_config
             )
-    except LLMException as e:
+    except (LLMException, ModelRetry, ControlFlowExit) as e:
         raise e.with_traceback(None) from None
     except Exception as e:
         friendly_msg = get_user_friendly_error_message(e)

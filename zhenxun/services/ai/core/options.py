@@ -212,13 +212,6 @@ class GeminiOptions(BaseProviderOption):
     """检索定位配置，如 LBS 经纬度信息，配合 Google Maps 工具使用"""
 
 
-class DeepSeekOptions(BaseProviderOption):
-    """DeepSeek 专属特权参数"""
-
-    thinking: bool | None = Field(default=None)
-    """是否强制开启或关闭 R1 模型的思维链过程"""
-
-
 class OpenAITTSOptions(BaseProviderOption):
     """OpenAI TTS 专属特权参数"""
 
@@ -298,9 +291,13 @@ class TTSConfig(BaseModel):
     """语速 (通用映射)"""
 
     openai_options: OpenAITTSOptions = Field(default_factory=OpenAITTSOptions)
+    """OpenAI 厂商专属请求参数集"""
     gemini_options: GeminiTTSOptions = Field(default_factory=GeminiTTSOptions)
+    """Gemini 厂商专属请求参数集"""
     minimax_options: MiniMaxTTSOptions = Field(default_factory=MiniMaxTTSOptions)
+    """MiniMax 厂商专属请求参数集"""
     mimo_options: MiMoTTSOptions = Field(default_factory=MiMoTTSOptions)
+    """MiMo 厂商专属请求参数集"""
 
     custom_kwargs: dict[str, Any] = Field(default_factory=dict)
     """兜底逃生舱，包含的键值对将直接透传至顶层请求体中 (可用于缓存 TTL)"""
@@ -315,13 +312,18 @@ class GenerationConfig(BaseModel):
     """
 
     common: CommonLLMConfig = Field(default_factory=CommonLLMConfig)
+    """大模型生成核心通用配置项"""
     output: OutputFormatConfig = Field(default_factory=OutputFormatConfig)
+    """输出格式与约束控制配置项"""
     tools: ToolCallConfig = Field(default_factory=ToolCallConfig)
+    """工具调用策略与函数声明配置项"""
     media: MediaGenerationConfig = Field(default_factory=MediaGenerationConfig)
+    """多媒体生成相关配置项"""
 
     openai_options: OpenAIOptions = Field(default_factory=OpenAIOptions)
+    """OpenAI 厂商专属请求参数集"""
     gemini_options: GeminiOptions = Field(default_factory=GeminiOptions)
-    deepseek_options: DeepSeekOptions = Field(default_factory=DeepSeekOptions)
+    """Gemini 厂商专属请求参数集"""
 
     enable_caching: bool | None = Field(default=None)
     """是否在此次生成中开启上下文缓存 (Context Caching)"""

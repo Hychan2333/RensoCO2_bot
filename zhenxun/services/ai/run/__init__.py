@@ -1,7 +1,6 @@
 from zhenxun.services.ai.core.models import CancellationToken
 
 from .blackboard import BlackboardManager
-from .capabilities import GLOBAL_CAPABILITIES, register_global_capability
 from .context import (
     NoneBotDeps,
     RunContext,
@@ -12,15 +11,15 @@ from .hitl import HITLController
 from .hooks import Hooks
 from .models import (
     AgentRunResult,
+    AgentTask,
     StreamedRunResult,
-    Task,
 )
 from .session import session_manager
 from .ui import UIController
 
 __all__ = [
-    "GLOBAL_CAPABILITIES",
     "AgentRunResult",
+    "AgentTask",
     "BlackboardManager",
     "CancellationToken",
     "HITLController",
@@ -30,9 +29,7 @@ __all__ = [
     "NoneBotDeps",
     "RunContext",
     "StreamedRunResult",
-    "Task",
     "UIController",
     "get_current_run_context",
-    "register_global_capability",
     "session_manager",
 ]
