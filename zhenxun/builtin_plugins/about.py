@@ -32,15 +32,15 @@ _matcher = on_alconna(Alconna("关于"), priority=5, block=True, rule=to_me())
 
 
 QQ_INFO = """
-『绪山真寻Bot』
+『碳碳Bot』
 版本：{version}
-简介：基于Nonebot2开发，支持多平台，是一个非常可爱的Bot呀，希望与大家要好好相处
+简介：基于Nonebot2, (及原项目真寻Bot) 开发，支持多平台，是一个有点冷漠的Bot呀，希望与大家要好好相处
 """.strip()
 
 INFO = """
-『绪山真寻Bot』
+『碳碳Bot』
 版本：{version}
-简介：基于Nonebot2开发，支持多平台，是一个非常可爱的Bot呀，希望与大家要好好相处
+简介：基于Nonebot2, (及原项目真寻Bot) 开发，支持多平台，是一个有点冷漠的Bot呀，希望与大家要好好相处
 项目地址：https://github.com/zhenxun-org/zhenxun_bot
 文档地址：https://zhenxun-org.github.io/zhenxun_bot/
 """.strip()

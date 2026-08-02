@@ -1,7 +1,7 @@
 [project]
 name = "zhenxun-bot"
 version = "0.2.4"
-description = "基于 Nonebot2 和 go-cqhttp 开发，以 postgresql 作为数据库，非常可爱的绪山真寻bot"
+description = "基于 Nonebot2 和 go-cqhttp 开发，以 postgresql 作为数据库，有点冷漠的的碳碳bot[基于绪山真寻bot二改]"
 authors = [{ name = "HibiKier", email = "775757368@qq.com" }]
 license = { text = "AGPL-3.0" }
 requires-python = ">=3.10"
